@@ -29,6 +29,13 @@ if ! [ -f "${CORE_STORAGE_DISK_DIR}/index.html" ]; then
     cp /core/ui-root/index.html /core/ui-root/index_icon.svg ${CORE_STORAGE_DISK_DIR}
 fi
 
+# Install / refresh HSTile low-latency player assets into public storage root.
+# Served as: /hstile-player.html?id=<channel-uuid>&autoplay=1&mute=1
+if [ -d /core/ui-root/hstile ]; then
+    cp -f /core/ui-root/hstile/hstile-player.html ${CORE_STORAGE_DISK_DIR}/hstile-player.html
+    cp -f /core/ui-root/hstile/hls.min.js ${CORE_STORAGE_DISK_DIR}/hls.min.js
+fi
+
 # Now run the core with the possibly converted configuration.
 
 exec ./bin/core

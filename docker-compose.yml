@@ -1,0 +1,20 @@
+# Local / generic compose for restreamer-dev
+# Prefer docker-compose.portainer.yml on DataVault.
+
+services:
+  restreamer-dev:
+    build: .
+    image: restreamer-dev:local
+    container_name: restreamer-dev
+    restart: unless-stopped
+    environment:
+      TZ: America/Los_Angeles
+    ports:
+      - "18085:8080"
+      - "18181:8181"
+      - "11935:1935"
+      - "11936:1936"
+      - "16000:6000/udp"
+    volumes:
+      - ./config:/core/config
+      - ./data:/core/data

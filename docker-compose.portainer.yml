@@ -1,0 +1,25 @@
+# Portainer Stack name: restreamer-dev
+# Isolated from production stack "restreamer" (ports 8085/8181/1935/1936/6000).
+#
+# Prerequisite on DataVault:
+#   cd /volume1/docker/restreamer-dev && docker build -t restreamer-dev:local .
+# Or: make deploy-datavault from this repo.
+#
+# Paths assume project root: /volume1/docker/restreamer-dev
+
+services:
+  restreamer-dev:
+    image: restreamer-dev:local
+    container_name: restreamer-dev
+    restart: unless-stopped
+    environment:
+      TZ: America/Los_Angeles
+    ports:
+      - "18085:8080"
+      - "18181:8181"
+      - "11935:1935"
+      - "11936:1936"
+      - "16000:6000/udp"
+    volumes:
+      - /volume1/docker/restreamer-dev/config:/core/config
+      - /volume1/docker/restreamer-dev/data:/core/data
