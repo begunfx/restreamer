@@ -84,29 +84,58 @@ fi
 
 "${SSH_BASE[@]}" "$DEPLOY_SSH_HOST" "mkdir -p '${DEPLOY_PATH}/config' '${DEPLOY_PATH}/data'"
 
-TAR_EXCLUDES=()
-while IFS= read -r line || [[ -n "$line" ]]; do
-  [[ -z "$line" || "$line" =~ ^# ]] && continue
-  TAR_EXCLUDES+=(--exclude="$line")
-done < "$EXCLUDE_FILE"
-
 STAGE="/tmp/restreamer-dev-deploy-$$"
 echo "==> Streaming files to DataVault…"
 
+# bsdtar treats exclude "data" / "./data" as every path component named data,
+# which drops Go's vendor/.../publicsuffix/data. Filter in Python instead:
+# skip only the repo-root runtime config/ and data/ trees.
 export COPYFILE_DISABLE=1
-tar -C "$ROOT" "${TAR_EXCLUDES[@]}" -cf - . \
-  | "${SSH_BASE[@]}" "$DEPLOY_SSH_HOST" \
-    "set -euo pipefail; \
-     STAGE='${STAGE}'; \
-     DEPLOY_PATH='${DEPLOY_PATH}'; \
-     rm -rf \"\$STAGE\"; mkdir -p \"\$STAGE\" \"\$DEPLOY_PATH\"; \
-     tar -C \"\$STAGE\" -xf -; \
-     rsync -a --delete \
-       --exclude 'config/' \
-       --exclude 'data/' \
-       \"\$STAGE\"/ \"\$DEPLOY_PATH\"/; \
-     rm -rf \"\$STAGE\"; \
-     echo remote_sync_ok"
+python3 - "$ROOT" "$EXCLUDE_FILE" <<'PY' | "${SSH_BASE[@]}" "$DEPLOY_SSH_HOST" "set -euo pipefail; STAGE='${STAGE}'; DEPLOY_PATH='${DEPLOY_PATH}'; rm -rf \"\$STAGE\"; mkdir -p \"\$STAGE\" \"\$DEPLOY_PATH\"; tar -C \"\$STAGE\" -xf -; rsync -a --delete --filter 'P /config/' --filter 'P /data/' \"\$STAGE\"/ \"\$DEPLOY_PATH\"/; rm -rf \"\$STAGE\"; echo remote_sync_ok"
+import fnmatch
+import os
+import sys
+import tarfile
+
+root = os.path.abspath(sys.argv[1])
+exclude_file = sys.argv[2]
+skip_top = {"config", "data", ".git"}
+patterns = []
+with open(exclude_file, encoding="utf-8") as fh:
+    for line in fh:
+        line = line.strip()
+        if not line or line.startswith("#") or line.startswith("!"):
+            continue
+        if line.rstrip("/") in skip_top:
+            continue
+        patterns.append(line.rstrip("/"))
+
+def skipped(rel):
+    rel = rel.replace(os.sep, "/")
+    base = rel.split("/", 1)[0]
+    if base in skip_top:
+        return True
+    name = rel.rsplit("/", 1)[-1]
+    for pat in patterns:
+        if fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(name, pat) or rel.startswith(pat + "/"):
+            return True
+    return False
+
+with tarfile.open(fileobj=sys.stdout.buffer, mode="w|") as tar:
+    for dirpath, dirnames, filenames in os.walk(root):
+        rel_dir = os.path.relpath(dirpath, root)
+        if rel_dir == ".":
+            rel_dir = ""
+        dirnames[:] = [
+            d for d in dirnames
+            if not skipped(os.path.join(rel_dir, d) if rel_dir else d)
+        ]
+        for name in filenames:
+            rel = os.path.join(rel_dir, name) if rel_dir else name
+            if skipped(rel):
+                continue
+            tar.add(os.path.join(root, rel), arcname=rel, recursive=False)
+PY
 
 if [[ "$SYNC_ONLY" -eq 1 ]]; then
   echo "==> Sync-only complete (no build/recreate)"
@@ -140,6 +169,7 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 # Synology often lacks buildx; force classic builder when buildx is missing.
+# --no-cache on core COPY path is avoided; bust stale layers by rebuilding after source sync.
 if "\${DOCKER[@]}" buildx version >/dev/null 2>&1; then
   export DOCKER_BUILDKIT=1
   export COMPOSE_DOCKER_CLI_BUILD=1

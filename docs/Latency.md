@@ -29,9 +29,33 @@ Residual floor for HLS with `hls_time 2` + 1 segment sync is roughly **~4–6s**
 
 Custom player: `/hstile-player.html?id=<uuid>&autoplay=1&mute=1`
 
-- Vendored `hls.js` with `lowLatencyMode`, short buffers, `liveSyncDurationCount: 1`
-- Seeks toward live edge on start
-- Periodic resync if lag drifts above 8s
+- Vendored `hls.js` `1.5.17`: `liveSyncDurationCount: 2`, `liveMaxLatencyDurationCount: 6`, `maxLiveSyncPlaybackRate: 1.1`, `maxBufferLength: 6`
+- Catches up by playback rate (no seeking); hard jump only if lag > 12s
+- Holding < 1 segment from the edge starves the buffer (measured 10 seeks + 15 stalls / 15s) — do not tighten below 2 target durations
+
+## Street channel re-encode (restreamer-dev only, 2026-11-05)
+
+Stream copy segments end on camera keyframes (~2–3s), which sets the latency floor. Dev Street output now re-encodes with a fixed 1s GOP:
+
+```bash
+-codec:v libx264 -preset veryfast -tune zerolatency -profile:v main -pix_fmt yuv420p \
+  -r 30 -g 30 -keyint_min 30 -sc_threshold 0 -force_key_frames "expr:gte(t,n_forced*1)" \
+  -b:v 700k -maxrate 900k -bufsize 900k \
+  -hls_time 1 -hls_list_size 4
+```
+
+| Metric | Copy, `hls_time 2` (prod) | Re-encode, `hls_time 1` (dev) |
+|--------|---------------------------|-------------------------------|
+| Segment length | ~2–3s | 1.0s |
+| Player behind playlist edge | ~12–18s (stock Video.js) | 1–2s |
+| Camera OSD vs wall clock | ~20s | ~3s |
+| Playback (30s sample) | — | 901 frames, 0 stalls, 0 dropped |
+| `restreamer-dev` CPU | ~1% | ~24% of one core (Ryzen V1500B, 640x360) |
+
+> [!WARNING] UI overwrite
+> Applied via `PUT /api/v3/process/{id}`, not the Restreamer UI. Saving the Street channel in the UI regenerates FFmpeg options and can revert to `-codec:v copy` / `-hls_time 2`.
+
+Restreamer's disk cache serves static files for up to 300s (`storage.disk.cache.ttl_seconds`); player updates can take 5 minutes to reach tablets.
 
 ## Validation checklist
 

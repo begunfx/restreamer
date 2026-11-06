@@ -11,9 +11,9 @@
     html, body { margin: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
     video { width: 100%; height: 100%; object-fit: contain; background: #000; }
     #status {
-      position: absolute; left: 8px; bottom: 8px; z-index: 2;
-      color: #9f9; font: 12px/1.3 monospace; background: rgba(0,0,0,.55);
-      padding: 4px 6px; border-radius: 4px; pointer-events: none;
+      position: absolute; right: 6px; bottom: 4px; z-index: 2;
+      color: #9f9; font: 11px/1.2 monospace; background: rgba(0,0,0,.45);
+      padding: 2px 4px; border-radius: 3px; pointer-events: none;
     }
   </style>
   <!-- Vendored hls.js (LAN-safe; no CDN required on tablets) -->
@@ -56,76 +56,71 @@
   video.muted = mute;
   var src = base + '/memfs/' + encodeURIComponent(id) + '.m3u8';
 
+  // Segments end on keyframes and have no partials. Playing closer than one
+  // segment to the edge starves the buffer and stutters, so hls.js holds two
+  // target durations back (scales with segment length) and speeds up slightly
+  // to catch up; only a large drift (tab backgrounded, network stall) triggers
+  // a hard jump.
+  var HARD_RESYNC_S = 12;
+
   function seekLiveEdge() {
     try {
       if (!video.seekable || video.seekable.length === 0) return;
       var end = video.seekable.end(video.seekable.length - 1);
-      if (isFinite(end) && end > 0) {
-        // Stay ~1s behind live edge to reduce rebuffer stalls
-        video.currentTime = Math.max(0, end - 1.0);
-      }
+      if (!isFinite(end) || end <= 0) return;
+      var lag = end - video.currentTime;
+      if (lag > HARD_RESYNC_S) video.currentTime = Math.max(0, end - 3);
+      setStatus(Math.max(0, lag).toFixed(1) + 's');
     } catch (e) { /* ignore */ }
   }
 
   function startNative() {
     video.src = src;
     video.addEventListener('loadedmetadata', seekLiveEdge);
+    video.addEventListener('canplay', seekLiveEdge);
     video.addEventListener('playing', seekLiveEdge);
     if (autoplay) video.play().catch(function () {});
-    setStatus('native HLS ' + id);
   }
 
-  if (video.canPlayType('application/vnd.apple.mpegurl') && !window.Hls) {
-    startNative();
-    return;
+  function armWatchdog() {
+    setInterval(function () {
+      if (video.paused && video.readyState === 0) return;
+      seekLiveEdge();
+    }, 1000);
   }
 
   if (!window.Hls || !Hls.isSupported()) {
     startNative();
+    armWatchdog();
     return;
   }
 
   var hls = new Hls({
     enableWorker: true,
-    lowLatencyMode: true,
+    lowLatencyMode: false,
     backBufferLength: 0,
-    maxBufferLength: 4,
-    maxMaxBufferLength: 6,
-    liveSyncDurationCount: 1,
-    liveMaxLatencyDurationCount: 3,
+    maxBufferLength: 6,
+    maxMaxBufferLength: 8,
+    liveSyncDurationCount: 2,
+    liveMaxLatencyDurationCount: 6,
+    maxLiveSyncPlaybackRate: 1.1,
     liveDurationInfinity: true,
-    highBufferWatchdogPeriod: 1
+    startPosition: -1,
+    highBufferWatchdogPeriod: 2
   });
 
   hls.loadSource(src);
   hls.attachMedia(video);
   hls.on(Hls.Events.MANIFEST_PARSED, function () {
-    seekLiveEdge();
     if (autoplay) video.play().catch(function () {});
-    setStatus('hls.js LL ' + id);
   });
   hls.on(Hls.Events.ERROR, function (_evt, data) {
-    if (!data) return;
-    if (data.fatal) {
-      setStatus('fatal ' + data.type + '/' + data.details);
-      if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
-      else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
-    }
+    if (!data || !data.fatal) return;
+    setStatus('fatal ' + data.type);
+    if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
+    else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
   });
-
-  // Periodic re-sync if the tablet drifts behind live
-  setInterval(function () {
-    if (video.paused) return;
-    try {
-      if (!video.seekable || video.seekable.length === 0) return;
-      var end = video.seekable.end(video.seekable.length - 1);
-      var lag = end - video.currentTime;
-      if (lag > 8) {
-        video.currentTime = Math.max(0, end - 1.0);
-        setStatus('resync lag=' + lag.toFixed(1) + 's');
-      }
-    } catch (e) { /* ignore */ }
-  }, 5000);
+  armWatchdog();
 })();
   </script>
 </body>

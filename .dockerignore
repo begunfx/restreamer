@@ -1,7 +1,10 @@
+# Only exclude Restreamer runtime/local dirs at the build-context root.
+# Do NOT use bare "config/" or "data/" — those also wipe _build/core/config
+# and vendor/.../publicsuffix/data during docker build.
 .git/
 .github/
-config/
-data/
+/config/
+/data/
 deploy.env
 .env
 .env.*
@@ -14,6 +17,10 @@ readme-promo.gif
 .DS_Store
 .idea/
 .vscode/
-docs/
+/docs/
 DEPLOY-DataVault.md
 README-FORK.md
+_build/restreamer-ui/node_modules/
+_build/restreamer-ui/build/
+_build/restreamer-ui/coverage/
+_build/core/.git/

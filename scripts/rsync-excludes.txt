@@ -10,7 +10,8 @@ id_rsa*
 id_ed25519*
 !*.pub
 readme-promo.gif
-data/
+# Top-level runtime dirs are skipped in deploy-datavault.sh (not here).
+# A bare data/ pattern also drops vendor/.../publicsuffix/data.
 *.log
 _build/restreamer-ui/node_modules/
 _build/restreamer-ui/build/
