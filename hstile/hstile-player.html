@@ -20,7 +20,7 @@
   <script src="hls.min.js"></script>
 </head>
 <body>
-  <video id="video" playsinline muted></video>
+  <video id="video" playsinline muted autoplay></video>
   <div id="status">init</div>
   <script>
 (function () {
@@ -54,40 +54,63 @@
   }
 
   video.muted = mute;
+  video.playsInline = true;
+  video.setAttribute('playsinline', '');
+  video.setAttribute('webkit-playsinline', '');
   var src = base + '/memfs/' + encodeURIComponent(id) + '.m3u8';
 
-  // Segments end on keyframes and have no partials. Playing closer than one
-  // segment to the edge starves the buffer and stutters, so hls.js holds two
-  // target durations back (scales with segment length) and speeds up slightly
-  // to catch up; only a large drift (tab backgrounded, network stall) triggers
-  // a hard jump.
-  var HARD_RESYNC_S = 12;
+  // Hold several whole segments behind the edge. Never change playbackRate
+  // (rate catch-up reads as choppy). Only hard-seek when playing AND far
+  // behind — never while paused (paused + seek loop = twitching).
+  var TARGET_BEHIND_S = 5;
+  var HARD_RESYNC_S = 20;
 
-  function seekLiveEdge() {
+  function tryPlay() {
+    if (!autoplay || !video.paused) return;
+    video.play().catch(function () {});
+  }
+
+  function seekLiveEdge(force) {
     try {
       if (!video.seekable || video.seekable.length === 0) return;
+      // Seeking while paused freezes currentTime while the edge advances,
+      // which retriggers resync every few seconds and looks like twitching.
+      if (video.paused && !force) {
+        setStatus('paused');
+        return;
+      }
       var end = video.seekable.end(video.seekable.length - 1);
       if (!isFinite(end) || end <= 0) return;
       var lag = end - video.currentTime;
-      if (lag > HARD_RESYNC_S) video.currentTime = Math.max(0, end - 3);
+      if (force || lag > HARD_RESYNC_S) {
+        video.currentTime = Math.max(0, end - TARGET_BEHIND_S);
+        lag = TARGET_BEHIND_S;
+      }
       setStatus(Math.max(0, lag).toFixed(1) + 's');
     } catch (e) { /* ignore */ }
   }
 
   function startNative() {
     video.src = src;
-    video.addEventListener('loadedmetadata', seekLiveEdge);
-    video.addEventListener('canplay', seekLiveEdge);
-    video.addEventListener('playing', seekLiveEdge);
-    if (autoplay) video.play().catch(function () {});
+    video.addEventListener('loadedmetadata', function () { seekLiveEdge(true); tryPlay(); });
+    video.addEventListener('canplay', tryPlay);
+    video.addEventListener('playing', function () { seekLiveEdge(false); });
+    tryPlay();
   }
 
   function armWatchdog() {
     setInterval(function () {
-      if (video.paused && video.readyState === 0) return;
-      seekLiveEdge();
+      if (video.paused) {
+        tryPlay();
+        return;
+      }
+      seekLiveEdge(false);
     }, 1000);
   }
+
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) tryPlay();
+  });
 
   if (!window.Hls || !Hls.isSupported()) {
     startNative();
@@ -99,11 +122,13 @@
     enableWorker: true,
     lowLatencyMode: false,
     backBufferLength: 0,
-    maxBufferLength: 6,
-    maxMaxBufferLength: 8,
-    liveSyncDurationCount: 2,
-    liveMaxLatencyDurationCount: 6,
-    maxLiveSyncPlaybackRate: 1.1,
+    maxBufferLength: 14,
+    maxMaxBufferLength: 18,
+    // ~5s behind at 1s segments. Cap latency high so hls.js does not
+    // hard-jump (visible twitch) during normal drift.
+    liveSyncDurationCount: 5,
+    liveMaxLatencyDurationCount: 30,
+    maxLiveSyncPlaybackRate: 1,
     liveDurationInfinity: true,
     startPosition: -1,
     highBufferWatchdogPeriod: 2
@@ -112,7 +137,7 @@
   hls.loadSource(src);
   hls.attachMedia(video);
   hls.on(Hls.Events.MANIFEST_PARSED, function () {
-    if (autoplay) video.play().catch(function () {});
+    tryPlay();
   });
   hls.on(Hls.Events.ERROR, function (_evt, data) {
     if (!data || !data.fatal) return;
